@@ -13,7 +13,7 @@ if TOKEN is None:
 UPDATE_INTERVAL = int(os.getenv("UPDATE_INTERVAL", 60))  # по умолчанию 60 секунд
 
 # ID канала Discord для сообщений
-CHANNEL_ID = int(os.getenv("CHANNEL_ID", 1127290770571931739))
+CHANNEL_ID = int(os.getenv("CHANNEL_ID", 1482982357882507436))
 
 # IP и порт сервера CS2
 SERVER_IP = ("194.93.2.207", 27077)
