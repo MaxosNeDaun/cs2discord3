@@ -1,4 +1,3 @@
 discord.py
 a2s
-flask
-gunicorn
+discord.a2s
