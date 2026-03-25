@@ -1,74 +1,67 @@
 import discord
-from discord.ext import commands, tasks
+from discord.ext import tasks, commands
 import a2s
-import asyncio
 import os
+from flask import Flask
+from threading import Thread
 
-# Получаем токен из environment (Shared Variables на Railway)
-TOKEN = os.getenv("TOKEN")
-if TOKEN is None:
-    raise ValueError("TOKEN не найден! Добавьте его в Shared Variables на Railway.")
+# --- NASTAVENÍ WEBOVÉHO SERVERU PRO RENDER ---
+app = Flask('')
 
-# Можно сделать интервал обновления настраиваемым через переменную
-UPDATE_INTERVAL = int(os.getenv("UPDATE_INTERVAL", 60))  # по умолчанию 60 секунд
+@app.get('/')
+def home():
+    return "Bot is running!"
 
-# ID канала Discord для сообщений
-CHANNEL_ID = int(os.getenv("CHANNEL_ID", 1482982357882507436))
+def run_flask():
+    # Render vyžaduje port, který mu přidělí v proměnné PORT
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host='0.0.0.0', port=port)
 
-# IP и порт сервера CS2
-SERVER_IP = ("194.93.2.207", 27077)
+def keep_alive():
+    t = Thread(target=run_flask)
+    t.daemon = True
+    t.start()
 
-# Настройка intents
+# --- NASTAVENÍ DISCORD BOTA ---
 intents = discord.Intents.default()
-intents.message_content = True  # Нужно, если используешь команды
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# Функция получения информации с сервера
-async def get_server_info():
+# NASTAVENÍ CS2 SERVERU (Můžeš změnit nebo dát do Environment Variables)
+IP = os.getenv("CS2_IP", "127.0.0.1") # Sem dej IP serveru, pokud ji nemáš v ENV
+PORT = int(os.getenv("CS2_PORT", 27015)) # Sem dej port serveru
+
+@tasks.loop(seconds=30)
+async def update_status():
     try:
-        info = await asyncio.to_thread(a2s.info, SERVER_IP)
-        players = await asyncio.to_thread(a2s.players, SERVER_IP)
-        player_list = "\n".join([p.name for p in players]) if players else "Пусто"
-
-        embed = discord.Embed(
-            title="Статус сервера",
-            color=discord.Color.green()
-        )
-        embed.add_field(name="🟢 В сети", value=f"{SERVER_IP[0]}:{SERVER_IP[1]}", inline=False)
-        embed.add_field(name="Карта", value=info.map_name, inline=True)
-        embed.add_field(name="Игроки", value=f"{info.player_count}/{info.max_players}", inline=True)
-        embed.add_field(name="Список игроков", value=player_list, inline=False)
-        return embed
-
+        # Získání info o CS2 serveru přes a2s
+        info = a2s.info((IP, PORT))
+        players = a2s.players((IP, PORT))
+        
+        status_text = f"{info.player_count}/{info.max_players} hráčů na CS2"
+        await bot.change_presence(activity=discord.Game(name=status_text))
+        print(f"Status aktualizován: {status_text}")
     except Exception as e:
-        print("Ошибка при запросе сервера:", e)
-        embed = discord.Embed(title="🔴 Сервер оффлайн", color=discord.Color.red())
-        embed.add_field(name="IP:Port", value=f"{SERVER_IP[0]}:{SERVER_IP[1]}", inline=True)
-        return embed
+        print(f"Chyba při čtení CS2 serveru: {e}")
+        await bot.change_presence(activity=discord.Game(name="Server Offline"))
 
-# Задача для автообновления статуса
-@tasks.loop(seconds=UPDATE_INTERVAL)
-async def update_status_message():
-    channel = bot.get_channel(CHANNEL_ID)
-    if not channel:
-        print("❌ Канал не найден!")
-        return
-
-    if not hasattr(bot, "status_message") or bot.status_message is None:
-        bot.status_message = await channel.send(embed=await get_server_info())
-    else:
-        await bot.status_message.edit(embed=await get_server_info())
-
-# Команда для ручного запроса статуса
-@bot.command()
-async def status(ctx):
-    await ctx.send(embed=await get_server_info())
-
-# Событие при запуске бота
 @bot.event
 async def on_ready():
-    print(f"Бот запущен как {bot.user}")
-    update_status_message.start()
+    print(f'Bot přihlášen jako {bot.user.name}')
+    update_status.start()
 
-# Запуск бота
-bot.run(TOKEN)
+# --- SPUŠTĚNÍ ---
+if __name__ == "__main__":
+    # 1. Spustíme Flask webserver (pro Render)
+    keep_alive()
+    
+    # 2. Načteme TOKEN
+    TOKEN = os.getenv("TOKEN")
+    
+    if not TOKEN:
+        # Tato hláška se objeví v logu Renderu, pokud zapomeneš přidat Environment Variable
+        print("CHYBA: Proměnná 'TOKEN' nebyla nalezena v nastavení Renderu!")
+    else:
+        try:
+            bot.run(TOKEN)
+        except Exception as e:
+            print(f"Nepodařilo se spustit bota: {e}")
