@@ -11,8 +11,8 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 TOKEN = os.getenv("TOKEN")
 
 # Nastavení tvého CS2 serveru
-IP = "127.0.0.1"  # Tady jsi měl svou IP
-PORT = 27015      # Tady jsi měl svůj port
+IP = "194.93.2.207"  # Tady jsi měl svou IP
+PORT = 27077      # Tady jsi měl svůj port
 
 @tasks.loop(seconds=30)
 async def update_status():
