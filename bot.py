@@ -93,7 +93,7 @@ async def get_server_info():
     try:
         info = await asyncio.wait_for(asyncio.to_thread(a2s.info, SERVER_IP), timeout=5.0)
         players = await asyncio.to_thread(a2s.players, SERVER_IP)
-        player_names = [p.name for p in players[:15]]
+        player_names = [p.name for p in players[:25]]
         player_list = "\n".join(player_names) if player_names else "Пусто"
 
         embed = discord.Embed(title="📊 Статус CS2", color=discord.Color.green())
