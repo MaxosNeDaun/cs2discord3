@@ -65,7 +65,7 @@ class RegistrationView(discord.ui.View):
     def create_embed(self, registered_users):
         user_list_str = "\n".join([f"• {user}" for user in registered_users]) if registered_users else "Пока никого нет"
         embed = discord.Embed(
-            title="🎮 Регистрация на игру", 
+            title="Регистрация на 5х5 от dinobombino", 
             description=self.description, 
             color=discord.Color.blue()
         )
