@@ -7,7 +7,7 @@ import sqlite3
 
 # --- НАСТРОЙКИ ---
 TOKEN = os.getenv("TOKEN")
-CHANNEL_ID = int(os.getenv("CHANNEL_ID",1127290770571931739)) 
+CHANNEL_ID = int(os.getenv("CHANNEL_ID",1482982357882507436)) 
 UPDATE_INTERVAL = int(os.getenv("UPDATE_INTERVAL", 60))
 SERVER_IP = ("194.93.2.207", 27077)
 
