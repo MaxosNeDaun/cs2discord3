@@ -1,77 +1,109 @@
 import discord
-from discord.ext import commands, tasks
-import a2s
-import asyncio
+from discord.ext import commands
 import os
+import sqlite3
 
+# Настройки
 TOKEN = os.getenv("TOKEN")
-UPDATE_INTERVAL = int(os.getenv("UPDATE_INTERVAL", 60))
-CHANNEL_ID = int(os.getenv("CHANNEL_ID", 1127290770571931739)) # Убедитесь, что ID верный
-SERVER_IP = ("194.93.2.207", 27077)
-
 intents = discord.Intents.default()
-intents.message_content = True 
+intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# Переменная для хранения ID сообщения, чтобы бот не «забывал» его при перезапуске
-status_msg_id = None
+# --- РАБОТА С БАЗОЙ ДАННЫХ ---
+def init_db():
+    conn = sqlite3.connect("registration.db")
+    cursor = conn.cursor()
+    # Создаем таблицу, если её нет
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS participants (
+            message_id TEXT,
+            user_name TEXT,
+            PRIMARY KEY (message_id, user_name)
+        )
+    ''')
+    conn.commit()
+    conn.close()
 
-async def get_server_info():
+def add_user(msg_id, user_name):
+    conn = sqlite3.connect("registration.db")
+    cursor = conn.cursor()
     try:
-        # Устанавливаем таймаут, чтобы бот не зависал, если сервер CS2 лежит
-        info = await asyncio.wait_for(asyncio.to_thread(a2s.info, SERVER_IP), timeout=5.0)
-        players = await asyncio.to_thread(a2s.players, SERVER_IP)
-        
-        # Ограничиваем список игроков, чтобы не превысить лимит символов Discord Embed
-        player_names = [p.name if p.name else "Игрок" for p in players]
-        player_list = "\n".join(player_names[:20]) if player_names else "Пусто"
-        if len(player_names) > 20:
-            player_list += f"\n...и еще {len(player_names) - 20}"
+        cursor.execute("INSERT INTO participants (message_id, user_name) VALUES (?, ?)", (str(msg_id), user_name))
+        conn.commit()
+    except sqlite3.IntegrityError:
+        pass # Пользователь уже есть
+    finally:
+        conn.close()
 
-        embed = discord.Embed(title="📊 Статус сервера CS2", color=discord.Color.green())
-        embed.add_field(name="IP Адрес", value=f"`{SERVER_IP[0]}:{SERVER_IP[1]}`", inline=False)
-        embed.add_field(name="Карта", value=info.map_name, inline=True)
-        embed.add_field(name="Игроки", value=f"{info.player_count}/{info.max_players}", inline=True)
-        embed.add_field(name="Список игроков", value=f"```\n{player_list}\n```", inline=False)
-        return embed
+def remove_user(msg_id, user_name):
+    conn = sqlite3.connect("registration.db")
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM participants WHERE message_id = ? AND user_name = ?", (str(msg_id), user_name))
+    conn.commit()
+    conn.close()
 
-    except Exception as e:
-        print(f"Ошибка сервера: {e}")
-        embed = discord.Embed(title="🔴 Сервер оффлайн", color=discord.Color.red())
-        embed.add_field(name="IP:Port", value=f"{SERVER_IP[0]}:{SERVER_IP[1]}")
-        return embed
+def get_users(msg_id):
+    conn = sqlite3.connect("registration.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT user_name FROM participants WHERE message_id = ?", (str(msg_id),))
+    rows = cursor.fetchall()
+    conn.close()
+    return [row[0] for row in rows]
 
-@tasks.loop(seconds=UPDATE_INTERVAL)
-async def update_status_message():
-    global status_msg_id
-    try:
-        # Используем fetch_channel вместо get_channel
-        channel = await bot.fetch_channel(CHANNEL_ID)
-        embed = await get_server_info()
+# --- ИНТЕРФЕЙС КНОПОК ---
+class RegistrationView(discord.ui.View):
+    def __init__(self, description, image_url, msg_id=None):
+        super().__init__(timeout=None)
+        self.description = description
+        self.image_url = image_url
+        self.msg_id = msg_id
 
-        if status_msg_id is None:
-            msg = await channel.send(embed=embed)
-            status_msg_id = msg.id
+    def create_embed(self, registered_users):
+        if not registered_users:
+            user_list_str = "Пока никого нет"
         else:
-            msg = await channel.fetch_message(status_msg_id)
-            await msg.edit(embed=embed)
-    except Exception as e:
-        print(f"Ошибка в цикле обновления: {e}")
-        # Если сообщение было удалено вручную, сбрасываем ID, чтобы создать новое
-        status_msg_id = None
+            user_list_str = "\n".join([f"• {user}" for user in registered_users])
+
+        embed = discord.Embed(
+            title="📝 Регистрация на событие",
+            description=self.description,
+            color=discord.Color.green()
+        )
+        embed.add_field(name="Участники:", value=user_list_str, inline=False)
+        if self.image_url:
+            embed.set_image(url=self.image_url)
+        return embed
+
+    @discord.ui.button(label="Зарегистрироваться", style=discord.ButtonStyle.success, custom_id="reg_btn")
+    async def register(self, interaction: discord.Interaction, button: discord.ui.Button):
+        user_name = interaction.user.display_name
+        add_user(interaction.message.id, user_name)
+        
+        users = get_users(interaction.message.id)
+        await interaction.response.edit_message(embed=self.create_embed(users), view=self)
+
+    @discord.ui.button(label="Отмена", style=discord.ButtonStyle.danger, custom_id="unreg_btn")
+    async def unregister(self, interaction: discord.Interaction, button: discord.ui.Button):
+        user_name = interaction.user.display_name
+        remove_user(interaction.message.id, user_name)
+        
+        users = get_users(interaction.message.id)
+        await interaction.response.edit_message(embed=self.create_embed(users), view=self)
+
+# --- КОМАНДЫ ---
+@bot.command()
+async def reg(ctx, description: str, image_url: str = None):
+    # Сначала отправляем сообщение, чтобы получить его ID для базы
+    view = RegistrationView(description, image_url)
+    embed = view.create_embed([])
+    message = await ctx.send(embed=embed, view=view)
+    # Можно использовать ID сообщения как уникальный ключ для разных регистраций
 
 @bot.event
 async def on_ready():
-    print(f"✅ Бот {bot.user} успешно запущен!")
-    if not update_status_message.is_running():
-        update_status_message.start()
-
-@bot.command()
-async def test(ctx):
-    await ctx.send("Бот работает и видит команды!")
-
-@bot.command()
-async def status(ctx):
-    await ctx.send(embed=await get_server_info())
+    init_db()
+    # Чтобы кнопки работали после перезагрузки, их нужно "зарегистрировать" снова
+    bot.add_view(RegistrationView("", "")) 
+    print(f"✅ Бот запущен, БД готова. Вошел как {bot.user}")
 
 bot.run(TOKEN)
