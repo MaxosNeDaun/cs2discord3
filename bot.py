@@ -72,3 +72,8 @@ async def on_ready():
 
 # Запуск бота
 bot.run(TOKEN)
+
+
+@bot.command()
+async def test(ctx):
+    await ctx.send("работает")
