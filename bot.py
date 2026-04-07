@@ -7,19 +7,25 @@ import sqlite3
 
 # --- КОНФИГУРАЦИЯ ---
 TOKEN = os.getenv("TOKEN")
-CHANNEL_ID = int(os.getenv("CHANNEL_ID",1482982357882507436)) 
-UPDATE_INTERVAL = int(os.getenv("UPDATE_INTERVAL", 60))
+CHANNEL_ID = 1482982357882507436 
+UPDATE_INTERVAL = 60
 SERVER_IP = ("194.93.2.207", 27077)
+
+# ПУТЬ К БАЗЕ ДАННЫХ (Для Railway Volume используем /app/data/)
+DB_PATH = "/app/data/registration.db" if os.path.exists("/app/data") else "registration.db"
 
 intents = discord.Intents.default()
 intents.message_content = True
+intents.presences = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# --- ОБНОВЛЕННАЯ БАЗА ДАННЫХ ---
+# --- БАЗА ДАННЫХ ---
 def init_db():
-    conn = sqlite3.connect("registration.db")
+    if "/" in DB_PATH:
+        os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+        
+    conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
-    # Таблица для участников
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS participants (
             message_id TEXT,
@@ -27,7 +33,6 @@ def init_db():
             PRIMARY KEY (message_id, user_name)
         )
     ''')
-    # Таблица для хранения настроек сообщения (текст и фото)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS message_settings (
             message_id TEXT PRIMARY KEY,
@@ -38,15 +43,32 @@ def init_db():
     conn.commit()
     conn.close()
 
+def fix_missing_participants(msg_id):
+    """Добавление списка игроков, которых ты прислал"""
+    participants = [
+        "!hiro", "Et1cZ", "Ferlisia", "JDH", "KFC bo$$", "POPIROS", 
+        "SKOP", "^_TynGla_^", "an1mesten", "darbojiy", "dinobombino", 
+        "noemoti", "onivey", "the owner", "Джек вора бей", "Садик", 
+        "гадёныш", "леквимоле", "лох", "мега найт"
+    ]
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    for name in participants:
+        try:
+            cursor.execute("INSERT OR IGNORE INTO participants VALUES (?, ?)", (str(msg_id), name))
+        except: pass
+    conn.commit()
+    conn.close()
+
 def save_msg_settings(msg_id, desc, img):
-    conn = sqlite3.connect("registration.db")
+    conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute("INSERT OR REPLACE INTO message_settings VALUES (?, ?, ?)", (str(msg_id), desc, img))
     conn.commit()
     conn.close()
 
 def get_msg_settings(msg_id):
-    conn = sqlite3.connect("registration.db")
+    conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute("SELECT description, image_url FROM message_settings WHERE message_id = ?", (str(msg_id),))
     res = cursor.fetchone()
@@ -54,30 +76,30 @@ def get_msg_settings(msg_id):
     return res if res else ("Без описания", None)
 
 def add_user(msg_id, user_name):
-    conn = sqlite3.connect("registration.db")
+    conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     try:
-        cursor.execute("INSERT INTO participants VALUES (?, ?)", (str(msg_id), user_name))
+        cursor.execute("INSERT OR IGNORE INTO participants VALUES (?, ?)", (str(msg_id), user_name))
         conn.commit()
     except: pass
     finally: conn.close()
 
 def remove_user(msg_id, user_name):
-    conn = sqlite3.connect("registration.db")
+    conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute("DELETE FROM participants WHERE message_id = ? AND user_name = ?", (str(msg_id), user_name))
     conn.commit()
     conn.close()
 
 def get_users(msg_id):
-    conn = sqlite3.connect("registration.db")
+    conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute("SELECT user_name FROM participants WHERE message_id = ?", (str(msg_id),))
     rows = cursor.fetchall()
     conn.close()
     return [row[0] for row in rows]
 
-# --- ИНТЕРФЕЙС ---
+# --- ИНТЕРФЕЙС РЕГИСТРАЦИИ ---
 class RegistrationView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
@@ -85,12 +107,10 @@ class RegistrationView(discord.ui.View):
     async def create_embed(self, msg_id):
         desc, img = get_msg_settings(msg_id)
         users = get_users(msg_id)
-        
         user_list = "\n".join([f"• {u}" for u in users]) if users else "Пока никого нет"
-        if len(user_list) > 1000: user_list = user_list[:997] + "..."
-
-        embed = discord.Embed(title="🎮 Регистрация на событие", description=desc, color=discord.Color.blue())
-        embed.add_field(name="Список участников:", value=f"```\n{user_list}\n```", inline=False)
+        
+        embed = discord.Embed(title="🎮 Регистрация на турнир", description=desc, color=discord.Color.blue())
+        embed.add_field(name=f"Участники ({len(users)}):", value=f"```\n{user_list}\n```", inline=False)
         if img: embed.set_image(url=img)
         return embed
 
@@ -104,59 +124,50 @@ class RegistrationView(discord.ui.View):
         remove_user(interaction.message.id, interaction.user.display_name)
         await interaction.response.edit_message(embed=await self.create_embed(interaction.message.id))
 
-# --- CS2 МОНИТОРИНГ (без изменений) ---
-async def get_server_info():
-    try:
-        info = await asyncio.wait_for(asyncio.to_thread(a2s.info, SERVER_IP), timeout=5.0)
-        players = await asyncio.to_thread(a2s.players, SERVER_IP)
-        all_names = [p.name.strip() for p in players if p.name.strip()]
-        diff = info.player_count - len(all_names)
-        if diff > 0:
-            for _ in range(diff): all_names.append("Игрок...")
-        player_list = "\n".join(all_names)
-        if len(player_list) > 1000: player_list = player_list[:997] + "..."
-        if not player_list: player_list = "На сервере никого нет"
-
-        embed = discord.Embed(title="📊 Статус CS2", color=discord.Color.green())
-        embed.add_field(name="IP Сервера", value=f"`{SERVER_IP[0]}:{SERVER_IP[1]}`", inline=False)
-        embed.add_field(name="Карта", value=info.map_name, inline=True)
-        embed.add_field(name="Игроки", value=f"{info.player_count}/{info.max_players}", inline=True)
-        embed.add_field(name="В сети:", value=f"```\n{player_list}\n```", inline=False)
-        return embed
-    except:
-        return discord.Embed(title="🔴 Сервер оффлайн", color=discord.Color.red())
-
+# --- СТАТУС CS2 ---
 @tasks.loop(seconds=UPDATE_INTERVAL)
 async def update_status_message():
-    channel = bot.get_channel(CHANNEL_ID) or await bot.fetch_channel(CHANNEL_ID)
+    channel = bot.get_channel(CHANNEL_ID)
     if not channel: return
-    embed = await get_server_info()
-    if not hasattr(bot, "status_message") or bot.status_message is None:
-        bot.status_message = await channel.send(embed=embed)
-    else:
-        try: await bot.status_message.edit(embed=embed)
-        except: bot.status_message = await channel.send(embed=embed)
+    try:
+        info = await asyncio.to_thread(a2s.info, SERVER_IP)
+        players = await asyncio.to_thread(a2s.players, SERVER_IP)
+        player_names = "\n".join([p.name for p in players if p.name]) or "Никто не играет"
+        
+        embed = discord.Embed(title="📊 Статус сервера CS2", color=discord.Color.green())
+        embed.add_field(name="IP Адрес", value=f"`{SERVER_IP[0]}:{SERVER_IP[1]}`", inline=False)
+        embed.add_field(name="Игроки", value=f"{info.player_count}/{info.max_players}", inline=True)
+        embed.add_field(name="Карта", value=info.map_name, inline=True)
+        embed.add_field(name="Список игроков:", value=f"```\n{player_names}\n```", inline=False)
+        
+        if not hasattr(bot, "status_message") or bot.status_message is None:
+            async for msg in channel.history(limit=10):
+                if msg.author == bot.user and msg.embeds and "Статус сервера CS2" in msg.embeds[0].title:
+                    bot.status_message = msg
+                    break
+            if not bot.status_message:
+                bot.status_message = await channel.send(embed=embed)
+        
+        await bot.status_message.edit(embed=embed)
+    except: pass
 
 # --- КОМАНДЫ ---
 @bot.command()
 async def reg(ctx, *, description: str):
-    image_url = ctx.message.attachments[0].url if ctx.message.attachments else None
+    img = ctx.message.attachments[0].url if ctx.message.attachments else None
     view = RegistrationView()
-    # Сначала отправляем, чтобы получить ID
-    temp_embed = discord.Embed(title="Создание регистрации...", color=discord.Color.light_grey())
-    message = await ctx.send(embed=temp_embed, view=view)
-    
-    # Сохраняем настройки в базу
-    save_msg_settings(message.id, description, image_url)
-    
-    # Обновляем сообщение уже с нормальным эмбедом
-    await message.edit(embed=await view.create_embed(message.id))
+    msg = await ctx.send(embed=discord.Embed(title="Создание..."), view=view)
+    save_msg_settings(msg.id, description, img)
+    # Если хочешь сразу добавить тех 20 человек в новую регистрацию, раскомментируй строку ниже:
+    # fix_missing_participants(msg.id)
+    await msg.edit(embed=await view.create_embed(msg.id))
 
 @bot.event
 async def on_ready():
     init_db()
-    bot.add_view(RegistrationView()) 
-    print(f"✅ Бот онлайн: {bot.user}")
-    if not update_status_message.is_running(): update_status_message.start()
+    bot.add_view(RegistrationView())
+    print(f"✅ Бот запущен как {bot.user}")
+    if not update_status_message.is_running():
+        update_status_message.start()
 
 bot.run(TOKEN)
