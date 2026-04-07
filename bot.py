@@ -7,15 +7,9 @@ import sqlite3
 
 # --- КОНФИГУРАЦИЯ ---
 TOKEN = os.getenv("TOKEN")
-CHANNEL_ID = int(os.getenv("CHANNEL_ID", 1482982357882507436))
+CHANNEL_ID = int(os.getenv("CHANNEL_ID",1482982357882507436)) 
 UPDATE_INTERVAL = int(os.getenv("UPDATE_INTERVAL", 60))
 SERVER_IP = ("194.93.2.207", 27077)
-
-# --- RELAY КОНФИГУРАЦИЯ ---
-# ID канала откуда копировать сообщения
-SOURCE_CHANNEL_ID = int(os.getenv("SOURCE_CHANNEL_ID",1127290770571931739))
-# ID канала куда копировать сообщения
-DESTINATION_CHANNEL_ID = int(os.getenv("DESTINATION_CHANNEL_ID",1359230337602949391))
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -25,6 +19,7 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 def init_db():
     conn = sqlite3.connect("registration.db")
     cursor = conn.cursor()
+    # Таблица для участников
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS participants (
             message_id TEXT,
@@ -32,6 +27,7 @@ def init_db():
             PRIMARY KEY (message_id, user_name)
         )
     ''')
+    # Таблица для хранения настроек сообщения (текст и фото)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS message_settings (
             message_id TEXT PRIMARY KEY,
@@ -108,7 +104,7 @@ class RegistrationView(discord.ui.View):
         remove_user(interaction.message.id, interaction.user.display_name)
         await interaction.response.edit_message(embed=await self.create_embed(interaction.message.id))
 
-# --- CS2 МОНИТОРИНГ ---
+# --- CS2 МОНИТОРИНГ (без изменений) ---
 async def get_server_info():
     try:
         info = await asyncio.wait_for(asyncio.to_thread(a2s.info, SERVER_IP), timeout=5.0)
@@ -141,63 +137,26 @@ async def update_status_message():
         try: await bot.status_message.edit(embed=embed)
         except: bot.status_message = await channel.send(embed=embed)
 
-# --- RELAY: копирование сообщений ---
-@bot.event
-async def on_message(message):
-    # Не копируем сообщения самого бота
-    if message.author == bot.user:
-        await bot.process_commands(message)
-        return
-
-    # Проверяем что relay настроен и сообщение из нужного канала
-    if SOURCE_CHANNEL_ID and DESTINATION_CHANNEL_ID:
-        if message.channel.id == SOURCE_CHANNEL_ID:
-            dest = bot.get_channel(DESTINATION_CHANNEL_ID)
-            if dest:
-                # Формируем embed с оригинальным сообщением
-                embed = discord.Embed(
-                    description=message.content or "",
-                    color=discord.Color.blurple(),
-                    timestamp=message.created_at
-                )
-                embed.set_author(
-                    name=message.author.display_name,
-                    icon_url=message.author.display_avatar.url
-                )
-                embed.set_footer(text=f"#{message.channel.name}")
-
-                # Если есть картинка — прикрепляем
-                if message.attachments:
-                    embed.set_image(url=message.attachments[0].url)
-
-                await dest.send(embed=embed)
-
-                # Если несколько вложений — отправляем остальные отдельно
-                for attachment in message.attachments[1:]:
-                    await dest.send(attachment.url)
-
-    await bot.process_commands(message)
-
 # --- КОМАНДЫ ---
 @bot.command()
 async def reg(ctx, *, description: str):
     image_url = ctx.message.attachments[0].url if ctx.message.attachments else None
     view = RegistrationView()
+    # Сначала отправляем, чтобы получить ID
     temp_embed = discord.Embed(title="Создание регистрации...", color=discord.Color.light_grey())
     message = await ctx.send(embed=temp_embed, view=view)
+    
+    # Сохраняем настройки в базу
     save_msg_settings(message.id, description, image_url)
+    
+    # Обновляем сообщение уже с нормальным эмбедом
     await message.edit(embed=await view.create_embed(message.id))
 
 @bot.event
 async def on_ready():
     init_db()
-    bot.add_view(RegistrationView())
+    bot.add_view(RegistrationView()) 
     print(f"✅ Бот онлайн: {bot.user}")
-    if SOURCE_CHANNEL_ID and DESTINATION_CHANNEL_ID:
-        print(f"🔁 Relay активен: {SOURCE_CHANNEL_ID} → {DESTINATION_CHANNEL_ID}")
-    else:
-        print("⚠️ Relay не настроен (SOURCE_CHANNEL_ID / DESTINATION_CHANNEL_ID не заданы)")
-    if not update_status_message.is_running():
-        update_status_message.start()
+    if not update_status_message.is_running(): update_status_message.start()
 
 bot.run(TOKEN)
